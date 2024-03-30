@@ -14,7 +14,6 @@ async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation)
             params: {
                 origins: `${orderLocation.latitude},${orderLocation.longitude}`,
                 destinations: `${deliveryPartnerLocation.latitude},${deliveryPartnerLocation.longitude}`,
-
                 key: 'AIzaSyAs3PWPbBMyFsNv9R-OKFbEaOO9VAHuB4c'
             }
         });
@@ -30,6 +29,7 @@ async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation)
         return -1;
     }
 }
+
 async function fetchOrders() {
     try {
         const ordersData = await firestoredb.collection('orders').get();
@@ -45,11 +45,11 @@ async function fetchOrders() {
                 const longitude = geopoint._longitude;
                 orders.push({ id: doc.id, latitude, longitude });
             }else{
-                    console.log("Geopoint is undefined for order:", doc.id)
+                    // console.log("Geopoint is undefined for order:", doc.id)
                 }
                 
             }else{
-                console.log("Location data is undefined for order: ",doc.id)
+                // console.log("Location data is undefined for order: ",doc.id)
             }
         });
        return orders;
@@ -71,11 +71,10 @@ async function fetchDeliveryPartners() {
             const longitude = locationCoordinates._longitude;
             deliveryPartners.push({id : doc.id,latitude,longitude});
         }else{
-            console.log(" Location data is undefined for DeliveryPartner: ",doc.id)
+            // console.log(" Location data is undefined for DeliveryPartner: ",doc.id)
         }
     })
     return deliveryPartners;
-        
     }catch(error){
         console.log('Error delivery orders: ', error);
         return [];
@@ -96,11 +95,11 @@ async function fetchDeliveryPartners() {
                         const longitude = geopoint._longitude;
                         stores.push({ id: doc.id, latitude, longitude });
                     }else{
-                            console.log("Geopoint is undefined for this store:", doc.id)
+                            // console.log("Geopoint is undefined for this store:", doc.id)
                         }
 
                 }else{
-                    console.log(" Store data is undefined : ",doc.id)
+                    // console.log(" Store data is undefined : ",doc.id)
                 }
             })
             return stores;
@@ -112,10 +111,8 @@ async function fetchDeliveryPartners() {
     }
 
 
-    async function findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation) {
-        
+async function findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation) {
         try{
-
         let shortestDistance = 9999;
         let nearestDeliveryPartnerId = '';
 
@@ -128,23 +125,21 @@ async function fetchDeliveryPartners() {
         
                 for (const store of storeLocation) {
                     const distanceToStore = await calculateDistanceUsingAPI(deliveryPartner, store);
-
                     totalDistance += distanceToStore;
-
                 }
-        
                 if (totalDistance < shortestDistance) {
                     shortestDistance = totalDistance;
                     nearestDeliveryPartnerId = deliveryPartner.id;
                 }
             }
+            return {nearestDeliveryPartnerId: nearestDeliveryPartnerId ,shortestDistance: shortestDistance
 
-            return nearestDeliveryPartnerId;
+            };
         }else{
             return '';
         }
     }catch(err){
-            console.log('Error Fetching store and delivery location : ', err);
+            // console.log('Error Fetching store and delivery location : ', err);
             return "";
         }
         
@@ -170,23 +165,20 @@ exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res
         if(storeLocation.length === 0){
             return res.status(404).send("No stores are available.");
         }
-
-        // let availableDeliveryPartner = [...deliveryPartners];
-
         for (const order of orders) {
-            const nearestDelivery = await findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation);
-            if (nearestDelivery !== '') {
-                nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDelivery});
-                deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDelivery);
+            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation);
+            if (nearestDeliveryPartnerId) {
+                nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
 
-                await allocateDeliveryPartnerToOrder(order.id, nearestDelivery);
+                deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDeliveryPartnerId);
+                const deliveryPartner = nearestDeliveryPartnerId;
+                await allocateDeliveryPartnerToOrder(order.id, deliveryPartner);
             } else {
-                console.log("No Delivery partners are available to deliver this order:", order.id);
+                // console.log("No Delivery partners are available to deliver this order:", order.id);
             }
         }
         return res.status(200).json(nearestDistances);
 } catch (error) {
-        console.error('Error in find distance :', error);
         return res.status(500).send('Internal Server Error');
     }
 });
@@ -196,9 +188,8 @@ async function allocateDeliveryPartnerToOrder(orderId,nearestDeliveryPartnerId){
         await firestoredb.collection('orders').doc(orderId).update({
             deliveryPartnerId:nearestDeliveryPartnerId
         })
-        console.log(`Delivery partner ${nearestDeliveryPartnerId} allocated to order ${orderId}`);
 
     }catch(err){
-        console.error("Error in allocateDeliveryPartnerToOrder:", err);
+        // console.error("Error in allocateDeliveryPartnerToOrder:", err);
     }
 }
