@@ -8,7 +8,6 @@ initializeApp();
 const firestoredb = getFirestore();
 
 async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation) {
-    
     try {
         const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
             params: {
@@ -38,12 +37,17 @@ async function fetchOrders() {
         ordersData.forEach(doc => {
             const data = doc.data();
              const address = data.address;
+             const deliveryId = data.deliveryPartnerId;
+             let assigned = false;
+             if(deliveryId){
+                assigned = true;
+            
             if(address.location){
                 const geopoint = address.location.geopoint;
                 if(geopoint){
                 const latitude = geopoint._latitude;
                 const longitude = geopoint._longitude;
-                orders.push({ id: doc.id, latitude, longitude });
+                orders.push({ id: doc.id, latitude, longitude, assigned });
             }else{
                     // console.log("Geopoint is undefined for order:", doc.id)
                 }
@@ -51,6 +55,7 @@ async function fetchOrders() {
             }else{
                 // console.log("Location data is undefined for order: ",doc.id)
             }
+        }
         });
        return orders;
     } catch (error) {
@@ -111,8 +116,8 @@ async function fetchDeliveryPartners() {
     }
 
 
-async function findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation) {
-        try{
+async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation) {
+    try{
         let shortestDistance = 9999;
         let nearestDeliveryPartnerId = '';
 
@@ -134,6 +139,7 @@ async function findNearestDeliveryPartnerForOrder(order, deliveryPartners, store
             }
             return {nearestDeliveryPartnerId: nearestDeliveryPartnerId ,shortestDistance: shortestDistance
 
+
             };
         }else{
             return '';
@@ -146,7 +152,7 @@ async function findNearestDeliveryPartnerForOrder(order, deliveryPartners, store
     }
 
  
-exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
+exports.findNearestDistanceForOrders = functions.runWith({ timeoutSeconds: 540 }).https.onRequest(async (req, res) => {
     if (req.method !== 'GET') {
         return res.status(400).send("Invalid request");
     }
@@ -157,7 +163,6 @@ exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res
         const storeLocation = await fetchStoreLocation();
         if(orders.length === 0){
             return res.status(404).send("No Orders are available.");
-
         }
         if(deliveryPartners.length === 0){
             return res.status(404).send("No Delivery Partners are available.");
@@ -165,10 +170,14 @@ exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res
         if(storeLocation.length === 0){
             return res.status(404).send("No stores are available.");
         }
+
         for (const order of orders) {
-            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrder(order, deliveryPartners, storeLocation);
+            if(!order.assigned){
+                const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
             if (nearestDeliveryPartnerId) {
                 nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
+                console.log("Nearest distance =======>,============>",nearestDistances);
+
 
                 deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDeliveryPartnerId);
                 const deliveryPartner = nearestDeliveryPartnerId;
@@ -176,9 +185,21 @@ exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res
             } else {
                 // console.log("No Delivery partners are available to deliver this order:", order.id);
             }
+         }else{
+            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
+            if (nearestDeliveryPartnerId) {
+             nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
+             console.log("Nearest distance =======>",nearestDistances);
+                // deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDeliveryPartnerId);
+            } else {
+                // console.log("No Delivery partners are available to deliver this order:", order.id);
+            }
         }
-        return res.status(200).json(nearestDistances);
+        }
+        
+        return res.status(200).send(nearestDistances);
 } catch (error) {
+        console.log("Error : ",error)
         return res.status(500).send('Internal Server Error');
     }
 });
@@ -190,6 +211,6 @@ async function allocateDeliveryPartnerToOrder(orderId,nearestDeliveryPartnerId){
         })
 
     }catch(err){
-        // console.error("Error in allocateDeliveryPartnerToOrder:", err);
+        console.error("Error in allocateDeliveryPartnerToOrder:", err);
     }
 }
