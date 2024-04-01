@@ -3,8 +3,10 @@ const { getFirestore, Timestamp, FieldValue, Filter } = require('firebase-admin/
 const functions = require('firebase-functions');
 const axios = require('axios');
 
-
-initializeApp();
+initializeApp({
+    credential: applicationDefault()
+  });
+  
 const firestoredb = getFirestore();
 
 async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation) {
@@ -34,21 +36,28 @@ async function fetchOrders() {
         const ordersData = await firestoredb.collection('orders').get();
         const orders = [];
         
+        
         ordersData.forEach(doc => {
             const data = doc.data();
+            const docId = doc.id;
              const address = data.address;
              const deliveryId = data.deliveryPartnerId;
+             const orderId = data.orderID;
+
              let assigned = false;
-             if(deliveryId){
+             if(deliveryId !== '' && deliveryId){
                 assigned = true;
-            
+                orders.push({id: orderId, deliveryId,assigned})
+            }else if(deliveryId == '' && deliveryId){
+            assigned = false;
             if(address.location){
                 const geopoint = address.location.geopoint;
                 if(geopoint){
                 const latitude = geopoint._latitude;
                 const longitude = geopoint._longitude;
-                orders.push({ id: doc.id, latitude, longitude, assigned });
-            }else{
+                orders.push({ id: orderId, docId: docId, latitude, longitude, assigned });
+             }
+            else{
                     // console.log("Geopoint is undefined for order:", doc.id)
                 }
                 
@@ -86,7 +95,7 @@ async function fetchDeliveryPartners() {
     }
     }
 
-    async function fetchStoreLocation(){
+async function fetchStoreLocation(){
         try{
             const storeData = await firestoredb.collection('stores').get();
             const stores = [];
@@ -151,16 +160,33 @@ async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartner
         
     }
 
- 
-exports.findNearestDistanceForOrders = functions.runWith({ timeoutSeconds: 540 }).https.onRequest(async (req, res) => {
+async function allocateDeliveryPartnerToOrder(orderId,nearestDeliveryPartnerId){
+        try{
+            await firestoredb.collection('orders').doc(orderId).update({
+                deliveryPartnerId:nearestDeliveryPartnerId
+            })
+    
+        }catch(err){
+            console.error("Error in allocateDeliveryPartnerToOrder:", err);
+        }
+    }
+    
+exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
     if (req.method !== 'GET') {
         return res.status(400).send("Invalid request");
     }
     try {
+       
         const nearestDistances = [];
-        const orders = await fetchOrders();
+         const orders = await fetchOrders();
+
+         
+     
         let deliveryPartners = await fetchDeliveryPartners();
+       
         const storeLocation = await fetchStoreLocation();
+        
+       
         if(orders.length === 0){
             return res.status(404).send("No Orders are available.");
         }
@@ -171,46 +197,34 @@ exports.findNearestDistanceForOrders = functions.runWith({ timeoutSeconds: 540 }
             return res.status(404).send("No stores are available.");
         }
 
-        for (const order of orders) {
-            if(!order.assigned){
-                const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
-            if (nearestDeliveryPartnerId) {
-                nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
-                console.log("Nearest distance =======>,============>",nearestDistances);
-
-
-                deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDeliveryPartnerId);
-                const deliveryPartner = nearestDeliveryPartnerId;
-                await allocateDeliveryPartnerToOrder(order.id, deliveryPartner);
-            } else {
-                // console.log("No Delivery partners are available to deliver this order:", order.id);
-            }
-         }else{
-            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
-            if (nearestDeliveryPartnerId) {
-             nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
-             console.log("Nearest distance =======>",nearestDistances);
-                // deliveryPartners = deliveryPartners.filter(obj => obj.id !== nearestDeliveryPartnerId);
-            } else {
-                // console.log("No Delivery partners are available to deliver this order:", order.id);
-            }
-        }
-        }
         
-        return res.status(200).send(nearestDistances);
+
+        for (let index = 0 ; index < orders.length -1 ; index++) {
+            if(orders[index].assigned ) {
+            nearestDistances.push({ OrderId: orders[index].id, NearestDeliveryPartnerId: orders[index].deliveryId});
+            }
+            else{
+            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(orders[index], deliveryPartners, storeLocation);
+            if (nearestDeliveryPartnerId) {
+             nearestDistances.push({ OrderId: orders[index].id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
+            const deliveryPartner = nearestDeliveryPartnerId;
+            await allocateDeliveryPartnerToOrder(orders[index].docId, deliveryPartner);
+
+            } else {
+                // console.log("No Delivery partners are available to deliver this order:", order.id);
+            }
+
+            }
+        }
+        console.log("nearestDistances ", nearestDistances );
+         return res.status(200).send(nearestDistances);
 } catch (error) {
         console.log("Error : ",error)
         return res.status(500).send('Internal Server Error');
     }
 });
 
-async function allocateDeliveryPartnerToOrder(orderId,nearestDeliveryPartnerId){
-    try{
-        await firestoredb.collection('orders').doc(orderId).update({
-            deliveryPartnerId:nearestDeliveryPartnerId
-        })
 
-    }catch(err){
-        console.error("Error in allocateDeliveryPartnerToOrder:", err);
-    }
-}
+
+
+
