@@ -17,7 +17,7 @@ async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation)
             params: {
                 origins: `${orderLocation.latitude},${orderLocation.longitude}`,
                 destinations: `${deliveryPartnerLocation.latitude},${deliveryPartnerLocation.longitude}`,
-                key: 'AIzaSyDLBZF4wQG1sBz20iAYxwTMFVwQEMcuy3Y'
+                key: ''
             }
         });
             if(response.data && response.data.status === 'OK' && response.data.rows && response.data.rows.length > 0){
