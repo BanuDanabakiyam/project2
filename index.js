@@ -11,8 +11,6 @@ initializeApp({
   
 const firestoredb = getFirestore();
 
-
-
 async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation) {
     try {
         const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
@@ -45,7 +43,6 @@ async function fetchOrders() {
             const address = data.address;
             const orderId = data.orderID;
             const orderStatus = data.orderStatus;
-            console.log("Order Status ====",orderStatus);
             if (address.location && !['Cancelled', 'Delivered'].includes(orderStatus)) {
                 const geopoint = address.location.geopoint;
                 if (geopoint) {
@@ -115,8 +112,7 @@ async function fetchStoreLocation(){
         }
     }
 
-
-    async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocations) {
+async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocations) {
         try {
             let shortestDistance = 9999;
             let nearestDeliveryPartner = '';
@@ -165,7 +161,7 @@ async function fetchStoreLocation(){
     }
     
     
-    exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
+exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
         if (req.method !== 'GET') {
             return res.status(400).send("Invalid request");
         }
@@ -189,16 +185,12 @@ async function fetchStoreLocation(){
                 const { nearestDeliveryPartnerId, shortestDistance, currentPosition, backToStore } = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
                 if (nearestDeliveryPartnerId) {
                     nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId, DistanceInKM: shortestDistance,currentPosition:currentPosition,backToStore:backToStore });
-                    const deliveryPartner = nearestDeliveryPartnerId;
-                    console.log("deliveryPartner ====> ", deliveryPartner);
                 } else {
                     // console.log("No Delivery partners are available to deliver this order:", order.id);
                 }
             });
             
             await Promise.all(promises);
-            
-            console.log("nearestDistances ", nearestDistances);
             return res.status(200).send(nearestDistances);
         } catch (error) {
             console.log("Error : ", error);
