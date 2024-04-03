@@ -2,6 +2,8 @@ const { initializeApp, applicationDefault, cert } = require('firebase-admin/app'
 const { getFirestore, Timestamp, FieldValue, Filter } = require('firebase-admin/firestore');
 const functions = require('firebase-functions');
 const axios = require('axios');
+const { exec } = require('child_process');
+
 
 initializeApp({
     credential: applicationDefault()
@@ -9,13 +11,15 @@ initializeApp({
   
 const firestoredb = getFirestore();
 
+
+
 async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation) {
     try {
         const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
             params: {
                 origins: `${orderLocation.latitude},${orderLocation.longitude}`,
                 destinations: `${deliveryPartnerLocation.latitude},${deliveryPartnerLocation.longitude}`,
-                key: 'AIzaSyAs3PWPbBMyFsNv9R-OKFbEaOO9VAHuB4c'
+                key: 'AIzaSyDLBZF4wQG1sBz20iAYxwTMFVwQEMcuy3Y'
             }
         });
             if(response.data && response.data.status === 'OK' && response.data.rows && response.data.rows.length > 0){
@@ -33,43 +37,31 @@ async function calculateDistanceUsingAPI(orderLocation, deliveryPartnerLocation)
 
 async function fetchOrders() {
     try {
-        const ordersData = await firestoredb.collection('orders').get();
+        const ordersData = await firestoredb.collection('orders').where('deliveryPartnerId', '==', '').get();
         const orders = [];
-        
-        
         ordersData.forEach(doc => {
             const data = doc.data();
             const docId = doc.id;
-             const address = data.address;
-             const deliveryId = data.deliveryPartnerId;
-             const orderId = data.orderID;
-
-             let assigned = false;
-             if(deliveryId !== '' && deliveryId){
-                assigned = true;
-                orders.push({id: orderId, deliveryId,assigned})
-            }else if(deliveryId == '' && deliveryId){
-            assigned = false;
-            if(address.location){
+            const address = data.address;
+            const orderId = data.orderID;
+            const orderStatus = data.orderStatus;
+            console.log("Order Status ====",orderStatus);
+            if (address.location && !['Cancelled', 'Delivered'].includes(orderStatus)) {
                 const geopoint = address.location.geopoint;
-                if(geopoint){
-                const latitude = geopoint._latitude;
-                const longitude = geopoint._longitude;
-                orders.push({ id: orderId, docId: docId, latitude, longitude, assigned });
-             }
-            else{
+                if (geopoint) {
+                    const latitude = geopoint._latitude;
+                    const longitude = geopoint._longitude;
+                    orders.push({ id: orderId, docId: docId, latitude, longitude });
+                }
+                else {
                     // console.log("Geopoint is undefined for order:", doc.id)
                 }
-                
-            }else{
-                // console.log("Location data is undefined for order: ",doc.id)
             }
-        }
         });
-       return orders;
+        return orders;
     } catch (error) {
         console.error('Error fetching orders:', error);
-        return []; 
+        return [];
     }
 }
 
@@ -94,7 +86,6 @@ async function fetchDeliveryPartners() {
         return [];
     }
     }
-
 async function fetchStoreLocation(){
         try{
             const storeData = await firestoredb.collection('stores').get();
@@ -160,71 +151,106 @@ async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartner
         
     }
 
-async function allocateDeliveryPartnerToOrder(orderId,nearestDeliveryPartnerId){
-        try{
-            await firestoredb.collection('orders').doc(orderId).update({
-                deliveryPartnerId:nearestDeliveryPartnerId
-            })
     
-        }catch(err){
-            console.error("Error in allocateDeliveryPartnerToOrder:", err);
+    exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
+        if (req.method !== 'GET') {
+            return res.status(400).send("Invalid request");
         }
-    }
+        try {
+            const nearestDistances = [];
+            const orders = await fetchOrders();
+            let deliveryPartners = await fetchDeliveryPartners();
+            const storeLocation = await fetchStoreLocation();
+            
+            if (orders.length === 0) {
+                return res.status(404).send("No Orders are available.");
+            }
+            if (deliveryPartners.length === 0) {
+                return res.status(404).send("No Delivery Partners are available.");
+            }
+            if (storeLocation.length === 0) {
+                return res.status(404).send("No stores are available.");
+            }
+            
+            const promises = orders.slice(0, 1).map(async (order) => {
+                const { nearestDeliveryPartnerId, shortestDistance } = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
+                if (nearestDeliveryPartnerId) {
+                    nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId, DistanceInKM: shortestDistance });
+                    const deliveryPartner = nearestDeliveryPartnerId;
+                    console.log("deliveryPartner ====> ", deliveryPartner);
+                } else {
+                    // console.log("No Delivery partners are available to deliver this order:", order.id);
+                }
+            });
+            
+            await Promise.all(promises);
+            
+            console.log("nearestDistances ", nearestDistances);
+            return res.status(200).send(nearestDistances);
+        } catch (error) {
+            console.log("Error : ", error);
+            return res.status(500).send('Internal Server Error');
+        }
+    });
     
-exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
-    if (req.method !== 'GET') {
-        return res.status(400).send("Invalid request");
-    }
-    try {
-       
-        const nearestDistances = [];
-         const orders = await fetchOrders();
 
-         
-     
-        let deliveryPartners = await fetchDeliveryPartners();
-       
-        const storeLocation = await fetchStoreLocation();
-        
-       
-        if(orders.length === 0){
-            return res.status(404).send("No Orders are available.");
-        }
-        if(deliveryPartners.length === 0){
-            return res.status(404).send("No Delivery Partners are available.");
-        }
-        if(storeLocation.length === 0){
-            return res.status(404).send("No stores are available.");
-        }
+// *********************************************************************************************
 
-        
+// async function fetchOrders() {
+//     try {
+//         const dataSend = [];
 
-        for (let index = 0 ; index < orders.length -1 ; index++) {
-            if(orders[index].assigned ) {
-            nearestDistances.push({ OrderId: orders[index].id, NearestDeliveryPartnerId: orders[index].deliveryId});
-            }
-            else{
-            const {nearestDeliveryPartnerId,shortestDistance} = await findNearestDeliveryPartnerForOrderAndStore(orders[index], deliveryPartners, storeLocation);
-            if (nearestDeliveryPartnerId) {
-             nearestDistances.push({ OrderId: orders[index].id, NearestDeliveryPartnerId: nearestDeliveryPartnerId,DistanceInKM : shortestDistance});
-            const deliveryPartner = nearestDeliveryPartnerId;
-            await allocateDeliveryPartnerToOrder(orders[index].docId, deliveryPartner);
+//         const ordersData = await firestoredb.collection('orders').get();
+//         ordersData.forEach(doc => {
+//             const docId = doc.id;
+//             dataSend.push({ orderId: docId });
+//         });
+//         return dataSend;
+//     } catch (error) {
+//         console.error('Error fetching orders:', error);
+//         throw error; // Rethrow the error to handle it elsewhere if needed
+//     }
+// }
 
-            } else {
-                // console.log("No Delivery partners are available to deliver this order:", order.id);
-            }
+// async function allocateDeliveryPartnerToOrder(orderID) {
+//     console.log("Order=====", orderID);
+//     try {
+//         await firestoredb.collection('orders').doc(orderID).update({
+//             deliveryPartnerId: ''
+//         });
+//     } catch (err) {
+//         console.error("Error:", err);
+//         throw err; // Rethrow the error to handle it elsewhere if needed
+//     }
+// }
 
-            }
-        }
-        console.log("nearestDistances ", nearestDistances );
-         return res.status(200).send(nearestDistances);
-} catch (error) {
-        console.log("Error : ",error)
-        return res.status(500).send('Internal Server Error');
-    }
-});
+// exports.getDeliver = functions.https.onRequest(async(req, res) => {
+//     try {
+//         const orders = await fetchOrders();
+//         const orderIds = orders.map(order => order.orderId); // Extracting order IDs
+//         await Promise.all(orderIds.map(orderId => allocateDeliveryPartnerToOrder(orderId)));
+//         res.send("Successfully Updated");
+//     } catch (err) {
+//         console.log("Error", err);
+//         res.status(500).send("Error occurred");
+//     }
+// });
 
 
 
+// // const deployFunction = true;
+// // if (deployFunction) {
+// //     const functionName = 'findNearestDistanceForOrders';
+// //     const timeoutDuration = '540s'; 
 
+// //     const command = `gcloud functions deploy ${functionName} --timeout=${timeoutDuration}`;
+
+// //     exec(command, (error, succ) => {
+// //         if (error) {
+// //             console.error(`Error deploying Cloud Function: ${error}`);
+// //             return;
+// //         }
+// //         console.log(`Cloud Function deployed successfully: ${succ}`);
+// //     });
+// }
 
