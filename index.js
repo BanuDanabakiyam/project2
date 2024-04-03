@@ -116,41 +116,54 @@ async function fetchStoreLocation(){
     }
 
 
-async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation) {
-    try{
-        let shortestDistance = 9999;
-        let nearestDeliveryPartnerId = '';
-
-        if(deliveryPartners.length > 0 && storeLocation.length > 0){
-            for (const deliveryPartner of deliveryPartners) {
-              let totalDistance = 0;
-        
-                const distanceToOrder = await calculateDistanceUsingAPI(deliveryPartner, order);
-                totalDistance += distanceToOrder;
-        
-                for (const store of storeLocation) {
-                    const distanceToStore = await calculateDistanceUsingAPI(deliveryPartner, store);
-                    totalDistance += distanceToStore;
+    async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocations) {
+        try {
+            let shortestDistance = 9999;
+            let nearestDeliveryPartner = '';
+            let backToStores = '';
+    
+            if (deliveryPartners.length > 0 && storeLocations.length > 0) {
+                for (const deliveryPartner of deliveryPartners) {
+                    let totalDistance = 0;
+    
+                    const distanceToOrder = await calculateDistanceUsingAPI(deliveryPartner, order);
+                    totalDistance += distanceToOrder;
+    
+                    let minDistanceToStore = 9999;
+                    let backToStoreIndex = -1;
+    
+                    for (let i = 0; i < storeLocations.length; i++) {
+                        const distanceToStore = await calculateDistanceUsingAPI(deliveryPartner, storeLocations[i]);
+                        if (distanceToStore < minDistanceToStore) {
+                            minDistanceToStore = distanceToStore;
+                            backToStoreIndex = i;
+                        }
+                    }
+                    totalDistance += minDistanceToStore;
+                    if (totalDistance < shortestDistance) {
+                        shortestDistance = totalDistance;
+                        nearestDeliveryPartner = deliveryPartner;
+                        backToStores = storeLocations[backToStoreIndex];
+                    }
+                    
                 }
-                if (totalDistance < shortestDistance) {
-                    shortestDistance = totalDistance;
-                    nearestDeliveryPartnerId = deliveryPartner.id;
+                if (nearestDeliveryPartner) {
+                    const distanceBackToStore = await calculateDistanceUsingAPI(nearestDeliveryPartner, backToStores);
+                    return {
+                        nearestDeliveryPartnerId: nearestDeliveryPartner.id,
+                        shortestDistance: shortestDistance,
+                        currentPosition: {latitude : nearestDeliveryPartner.latitude, longitude : nearestDeliveryPartner.longitude},
+                        backToStore: distanceBackToStore
+                    };
                 }
             }
-            return {nearestDeliveryPartnerId: nearestDeliveryPartnerId ,shortestDistance: shortestDistance
-
-
-            };
-        }else{
+        return '';
+        } catch (err) {
+            console.error('Error finding nearest delivery partner:', err);
             return '';
         }
-    }catch(err){
-            // console.log('Error Fetching store and delivery location : ', err);
-            return "";
-        }
-        
     }
-
+    
     
     exports.findNearestDistanceForOrders = functions.https.onRequest(async (req, res) => {
         if (req.method !== 'GET') {
@@ -173,9 +186,9 @@ async function findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartner
             }
             
             const promises = orders.slice(0, 1).map(async (order) => {
-                const { nearestDeliveryPartnerId, shortestDistance } = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
+                const { nearestDeliveryPartnerId, shortestDistance, currentPosition, backToStore } = await findNearestDeliveryPartnerForOrderAndStore(order, deliveryPartners, storeLocation);
                 if (nearestDeliveryPartnerId) {
-                    nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId, DistanceInKM: shortestDistance });
+                    nearestDistances.push({ OrderId: order.id, NearestDeliveryPartnerId: nearestDeliveryPartnerId, DistanceInKM: shortestDistance,currentPosition:currentPosition,backToStore:backToStore });
                     const deliveryPartner = nearestDeliveryPartnerId;
                     console.log("deliveryPartner ====> ", deliveryPartner);
                 } else {
